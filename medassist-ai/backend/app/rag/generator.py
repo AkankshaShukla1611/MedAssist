@@ -44,12 +44,12 @@ confidence is your own estimate (0.0 to 1.0) of how well the context supports th
 USER_TEMPLATE = """<context>
 {context}
 </context>
-
+{history_block}
 Question: {question}
 """
 
 
-def build_prompt(question: str, chunks: list[dict]) -> str:
+def build_prompt(question: str, chunks: list[dict], conversation_history: str = "") -> str:
     context_blocks = []
     for c in chunks:
         context_blocks.append(
@@ -57,7 +57,18 @@ def build_prompt(question: str, chunks: list[dict]) -> str:
         )
     context = "\n\n---\n\n".join(context_blocks) if context_blocks else "(no relevant context found)"
 
-    return SYSTEM_PROMPT + "\n" + USER_TEMPLATE.format(context=context, question=question)
+    history_block = ""
+    if conversation_history:
+        history_block = (
+            f"\n<conversation_history>\n{conversation_history}\n</conversation_history>\n"
+            "(Use this only to understand what the current question is referring to. "
+            "Still answer ONLY using the <context> block above — never use unstated "
+            "assumptions from prior turns as medical fact.)\n"
+        )
+
+    return SYSTEM_PROMPT + "\n" + USER_TEMPLATE.format(
+        context=context, question=question, history_block=history_block
+    )
 
 
 def _extract_json_block(text: str) -> str:
@@ -71,8 +82,8 @@ def _extract_json_block(text: str) -> str:
     return text
 
 
-async def generate_answer(question: str, chunks: list[dict]) -> dict:
-    prompt = build_prompt(question, chunks)
+async def generate_answer(question: str, chunks: list[dict], conversation_history: str = "") -> dict:
+    prompt = build_prompt(question, chunks, conversation_history)
     raw_output = await llm_generate(prompt)
 
     try:

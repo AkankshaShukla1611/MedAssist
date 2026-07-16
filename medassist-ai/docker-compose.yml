@@ -16,6 +16,23 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # Used for THREE separate logical purposes via DB index (see .env.example):
+    # DB 0 = app cache, DB 1 = Celery broker, DB 2 = Celery result backend.
+    # One container, three logical databases — no need for three Redis
+    # instances at this scale.
+
   ollama:
     image: ollama/ollama:latest
     restart: unless-stopped
@@ -32,10 +49,16 @@ services:
       context: .
       dockerfile: docker/Dockerfile.backend
     restart: unless-stopped
+    # Migrations run BEFORE the API starts serving traffic. This is now the
+    # authoritative schema mechanism (see backend/alembic/) — create_all()
+    # in app/main.py is dev-only and skipped when ENV=production.
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
     env_file:
       - .env
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       ollama:
         condition: service_started
@@ -44,6 +67,52 @@ services:
       - vector_store_data:/app/vector_store
     ports:
       - "8000:8000"
+
+  celery-worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    restart: unless-stopped
+    # Same image as the API — different process. This is intentional: the
+    # ingestion/evaluation task CODE (app/tasks/, app/services/) must stay
+    # identical between the API process and the worker process, or you get
+    # "works when I call it directly, fails as a task" drift. One image,
+    # one requirements.txt, two commands.
+    # -Q is not optional here: celery_app.py routes tasks to named queues
+    # ("ingestion", "evaluation"), not the Celery default queue ("celery").
+    # A worker started without -Q only consumes "celery" and would never
+    # pick up a single task — uploads and evaluations would queue forever
+    # with no visible error. Found and fixed during a stabilization pass.
+    command: celery -A app.core.celery_app worker --loglevel=info --concurrency=2 -Q ingestion,evaluation
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    volumes:
+      - uploads_data:/app/uploads
+      - vector_store_data:/app/vector_store
+    # No ports exposed — the worker doesn't serve HTTP, it only pulls tasks
+    # off the Redis broker. Task status is checked via the API's
+    # GET /admin/tasks/{task_id}, which queries the SAME Redis result
+    # backend, not the worker directly.
+
+  # NOTE on Celery Beat: not included. Beat is for SCHEDULED/periodic tasks
+  # (e.g. "re-embed all documents every night"), and there are currently no
+  # periodic tasks defined anywhere in app/tasks/ — every task here is
+  # triggered by a user action (upload, evaluate). Adding a Beat service
+  # with nothing for it to schedule would be a service running for no
+  # reason. If a periodic task is added later (e.g. nightly BM25 index
+  # compaction), add both the task and this service together:
+  #
+  # celery-beat:
+  #   build: *same as celery-worker*
+  #   command: celery -A app.core.celery_app beat --loglevel=info
+  #   depends_on: [redis]
 
   nginx:
     image: nginx:alpine
@@ -57,6 +126,7 @@ services:
 
 volumes:
   pg_data:
+  redis_data:
   ollama_data:
   uploads_data:
   vector_store_data:

@@ -6,6 +6,14 @@ from app.rag.loader import load_document_pages
 from app.rag.chunker import chunk_pages
 from app.rag.embedder import embed_texts
 from app.rag import retriever
+from app.rag.keyword_retriever import get_bm25_index
+
+
+def rebuild_keyword_index(db: Session) -> None:
+    """Rebuilds the BM25 index from the full current chunk table. Called after
+    any add/delete so dense (FAISS) and keyword (BM25) indices stay in sync."""
+    rows = db.query(models.Chunk.id, models.Chunk.document_id, models.Chunk.chunk_text).all()
+    get_bm25_index().rebuild([(r[0], r[1], r[2]) for r in rows])
 
 
 def process_document_by_id(document_id: int) -> None:
@@ -68,6 +76,8 @@ def process_document(db: Session, document: models.Document) -> None:
             chunk.embedding_id = chunk.id  # 1:1 mapping since we use IndexIDMap
         document.embedding_status = "complete"
         db.commit()
+
+        rebuild_keyword_index(db)
 
     except Exception:
         document.embedding_status = "failed"

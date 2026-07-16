@@ -8,23 +8,35 @@ from typing import Optional, List
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
-from passlib.context import CryptContext
+import bcrypt
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.database.database import get_db
 from app.database import models
 
-# --- Password hashing (bcrypt) ---
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# --- Password hashing (bcrypt, used directly) ---
+# NOTE: we call the `bcrypt` library directly rather than through passlib's
+# CryptContext. passlib 1.7.x's bcrypt backend-detection routine is broken
+# against bcrypt>=4.1 (raises a spurious "password cannot be longer than 72
+# bytes" error via an internal self-test, even for short passwords) — a
+# known upstream incompatibility. Calling bcrypt directly sidesteps it.
+_BCRYPT_MAX_BYTES = 72  # bcrypt's real limit — enforced explicitly below
 
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    password_bytes = password.encode("utf-8")
+    if len(password_bytes) > _BCRYPT_MAX_BYTES:
+        raise ValueError(f"Password must be at most {_BCRYPT_MAX_BYTES} bytes")
+    hashed = bcrypt.hashpw(password_bytes, bcrypt.gensalt())
+    return hashed.decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    try:
+        return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
+    except (ValueError, TypeError):
+        return False
 
 
 # --- JWT ---
@@ -72,6 +84,10 @@ def get_current_user(
         raise HTTPException(status_code=401, detail="User no longer exists")
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Account is disabled")
+
+    from app.core.activity import track_active_user
+    track_active_user(user.id)
+
     return user
 
 

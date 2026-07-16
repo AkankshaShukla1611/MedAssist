@@ -3,6 +3,7 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 
 from app.core.config import settings
+from app.core.cache import embedding_cache, cache_key_from_text
 
 
 @lru_cache(maxsize=1)
@@ -18,4 +19,21 @@ def embed_texts(texts: list[str]) -> np.ndarray:
 
 
 def embed_query(text: str) -> np.ndarray:
-    return embed_texts([text])[0]
+    """
+    Cached at the single-query level: identical question text (very common —
+    "what is the first-line treatment for X" gets asked repeatedly) skips
+    re-encoding entirely. Bulk embedding (embed_texts, used during document
+    ingestion) is NOT cached — each chunk is normally unique, so there's
+    nothing to reuse there.
+    """
+    if not settings.CACHE_ENABLED:
+        return embed_texts([text])[0]
+
+    key = cache_key_from_text(settings.EMBEDDING_MODEL, text)
+    cached = embedding_cache.get(key)
+    if cached is not None:
+        return np.array(cached, dtype="float32")
+
+    embedding = embed_texts([text])[0]
+    embedding_cache.set(key, embedding.tolist(), settings.CACHE_TTL_EMBEDDING_SECONDS)
+    return embedding

@@ -19,7 +19,10 @@ async def chat(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    result = await answer_question(db, current_user, payload.question)
+    result = await answer_question(
+        db, current_user, payload.question,
+        session_id=payload.session_id, category=payload.category,
+    )
     return result
 
 
@@ -37,7 +40,7 @@ async def history(
     )
     return [
         HistoryItem(
-            id=c.id, question=c.question, answer=c.answer,
+            id=c.id, session_id=c.session_id, question=c.question, answer=c.answer,
             confidence=c.confidence, created_at=c.created_at.isoformat(),
         )
         for c in conversations

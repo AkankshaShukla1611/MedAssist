@@ -31,7 +31,7 @@ def authenticate_user(db: Session, payload: LoginRequest) -> dict:
     # Deliberately generic error + constant-time-ish flow: don't reveal whether
     # the email exists. verify_password still runs against a dummy hash if no
     # user is found, to reduce timing-based user enumeration.
-    dummy_hash = "$2b$12$CwTycUXWue0Thq9StjUM0uJ8i6X5c0X5c0X5c0X5c0X5c0X5c0X5c"
+    dummy_hash = "$2b$12$8pgoApEvOkLFo/VWemKQQu6mux96bacC0dmRtMsSk43CSvn5xEkiK"
     hash_to_check = user.password_hash if user else dummy_hash
     password_ok = verify_password(payload.password, hash_to_check)
 
