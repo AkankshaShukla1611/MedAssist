@@ -1,0 +1,13 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+uploads/*
+!uploads/.gitkeep
+vector_store/*
+!vector_store/.gitkeep
+node_modules/
+dist/
+.DS_Store
+*.log
